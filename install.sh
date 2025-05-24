@@ -1,6 +1,7 @@
 #!/bin/sh
 # ~/.dotfiles/install.sh
 # Compatible with both bash and sh, no sudo required
+# Handles edge cases and fixes existing broken setups
 
 set -e
 
@@ -14,7 +15,7 @@ NC='\033[0m' # No Color
 printf "${GREEN}🚀 Setting up dotfiles...${NC}\n"
 
 # Get the dotfiles directory
-DOTFILES_DIR="$(cd "$(dirname "$0")" && pwd)"
+DOTFILES_DIR=""
 
 # If running via curl, clone the repo first
 if [ ! -d "$HOME/.dotfiles" ]; then
@@ -35,45 +36,84 @@ if [ ! -d "$HOME/.dotfiles" ]; then
     fi
 else
     DOTFILES_DIR="$HOME/.dotfiles"
+    printf "${BLUE}Using existing dotfiles directory: $DOTFILES_DIR${NC}\n"
+    
+    # Update existing repo
+    printf "${YELLOW}Updating dotfiles repository...${NC}\n"
+    cd "$DOTFILES_DIR"
+    git pull origin main 2>/dev/null || git pull origin master 2>/dev/null || printf "${YELLOW}Could not update repo${NC}\n"
 fi
 
 # Detect current shell
 CURRENT_SHELL=$(basename "$SHELL")
 printf "${BLUE}Current shell: $CURRENT_SHELL${NC}\n"
 
+# Function to safely remove existing files/symlinks
+safe_remove() {
+    target="$1"
+    if [ -L "$target" ]; then
+        printf "${YELLOW}Removing existing symlink: $target${NC}\n"
+        rm -f "$target"
+    elif [ -f "$target" ]; then
+        printf "${YELLOW}Backing up existing file: $target -> $target.backup$(date +%s)${NC}\n"
+        mv "$target" "$target.backup$(date +%s)"
+    fi
+}
+
 # Function to create symlinks safely
 create_symlink() {
     src="$1"
     dest="$2"
     
-    # Remove any existing symlink (even if broken)
-    if [ -L "$dest" ]; then
-        printf "${YELLOW}Removing existing symlink: $dest${NC}\n"
-        rm -f "$dest"
-    elif [ -f "$dest" ]; then
-        printf "${YELLOW}Backing up existing file: $dest -> $dest.backup${NC}\n"
-        mv "$dest" "$dest.backup"
-    fi
+    # Remove any existing file/symlink first
+    safe_remove "$dest"
     
     # Ensure source file exists before creating symlink
     if [ -f "$src" ]; then
         printf "${GREEN}Creating symlink: $dest -> $src${NC}\n"
         ln -sf "$src" "$dest"
+        return 0
     else
         printf "${RED}Warning: Source file $src not found, skipping symlink${NC}\n"
+        return 1
+    fi
+}
+
+# Special handling for ZSH - oh-my-zsh creates its own .zshrc
+handle_zsh_config() {
+    # If oh-my-zsh is installed, it may have created a .zshrc
+    if [ -d "$HOME/.oh-my-zsh" ]; then
+        printf "${YELLOW}oh-my-zsh detected, handling .zshrc carefully...${NC}\n"
+        
+        # Remove any existing zsh configs
+        safe_remove "$HOME/.zshrc"
+        safe_remove "$HOME/.zshrc.pre-oh-my-zsh"
+        
+        # Create our symlink
+        if [ -f "$DOTFILES_DIR/.zshrc" ]; then
+            ln -sf "$DOTFILES_DIR/.zshrc" "$HOME/.zshrc"
+            printf "${GREEN}Created .zshrc symlink${NC}\n"
+        fi
+    else
+        # Standard symlink creation
+        create_symlink "$DOTFILES_DIR/.zshrc" "$HOME/.zshrc"
     fi
 }
 
 # Create symlinks for dotfiles
+printf "${BLUE}Creating symlinks for dotfiles...${NC}\n"
 create_symlink "$DOTFILES_DIR/.bashrc" "$HOME/.bashrc"
-create_symlink "$DOTFILES_DIR/.zshrc" "$HOME/.zshrc"
 create_symlink "$DOTFILES_DIR/.vimrc" "$HOME/.vimrc"
 create_symlink "$DOTFILES_DIR/.gitconfig" "$HOME/.gitconfig"
 create_symlink "$DOTFILES_DIR/.gitignore_global" "$HOME/.gitignore_global"
 
-# Set up git to use global gitignore
-if command -v git >/dev/null 2>&1; then
+# Handle .zshrc specially
+handle_zsh_config
+
+# Set up git to use global gitignore (only if git is available and .gitconfig exists)
+if command -v git >/dev/null 2>&1 && [ -f "$HOME/.gitconfig" ]; then
     git config --global core.excludesfile ~/.gitignore_global
+    printf "${GREEN}Configured git to use global gitignore${NC}\n"
 fi
 
 # Detect OS
@@ -111,38 +151,58 @@ install_dependencies() {
         fi
         
     elif [ "$OS" = "linux" ]; then
-        printf "${YELLOW}Linux detected. Checking for user-level package managers...${NC}\n"
+        printf "${YELLOW}Linux detected. Installing user-level components...${NC}\n"
         
-        # Check if we can install without sudo using existing tools
-        if command -v apt-get >/dev/null 2>&1; then
-            printf "${BLUE}Note: Some packages might need manual installation.${NC}\n"
-            printf "${BLUE}Consider running: sudo apt-get install git vim curl bash-completion zsh${NC}\n"
-        elif command -v yum >/dev/null 2>&1; then
-            printf "${BLUE}Note: Some packages might need manual installation.${NC}\n"
-            printf "${BLUE}Consider running: sudo yum install git vim curl bash-completion zsh${NC}\n"
-        fi
-        
-        # Try to install user-level tools
-        # Install git-prompt manually if not available
-        if ! find /usr -name "*git-prompt*" 2>/dev/null | grep -q git-prompt; then
+        # Always download git-prompt for Linux
+        if [ ! -f "$HOME/.git-prompt.sh" ]; then
             printf "${YELLOW}Downloading git-prompt.sh...${NC}\n"
             curl -o "$HOME/.git-prompt.sh" https://raw.githubusercontent.com/git/git/master/contrib/completion/git-prompt.sh 2>/dev/null || true
+        fi
+        
+        # Show helpful commands for manual installation
+        printf "${BLUE}For additional features, consider installing:${NC}\n"
+        if command -v apt-get >/dev/null 2>&1; then
+            printf "${BLUE}  sudo apt-get install git vim curl bash-completion zsh${NC}\n"
+        elif command -v yum >/dev/null 2>&1; then
+            printf "${BLUE}  sudo yum install git vim curl bash-completion zsh${NC}\n"
         fi
     fi
 }
 
-# Install oh-my-zsh if zsh is available and oh-my-zsh isn't installed
+# Install oh-my-zsh and plugins
 install_oh_my_zsh() {
-    if command -v zsh >/dev/null 2>&1 && [ ! -d "$HOME/.oh-my-zsh" ]; then
-        printf "${YELLOW}Installing oh-my-zsh...${NC}\n"
-        sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended 2>/dev/null || true
+    if command -v zsh >/dev/null 2>&1; then
+        if [ ! -d "$HOME/.oh-my-zsh" ]; then
+            printf "${YELLOW}Installing oh-my-zsh...${NC}\n"
+            sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+            
+            # After oh-my-zsh installation, fix the .zshrc again
+            printf "${YELLOW}Fixing .zshrc after oh-my-zsh installation...${NC}\n"
+            handle_zsh_config
+        fi
         
         # Install useful plugins
         if [ -d "$HOME/.oh-my-zsh" ]; then
-            printf "${YELLOW}Installing zsh plugins...${NC}\n"
-            git clone https://github.com/zsh-users/zsh-autosuggestions "$HOME/.oh-my-zsh/custom/plugins/zsh-autosuggestions" 2>/dev/null || true
-            git clone https://github.com/zsh-users/zsh-syntax-highlighting "$HOME/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting" 2>/dev/null || true
+            printf "${YELLOW}Installing/updating zsh plugins...${NC}\n"
+            
+            # zsh-autosuggestions
+            if [ ! -d "$HOME/.oh-my-zsh/custom/plugins/zsh-autosuggestions" ]; then
+                printf "${YELLOW}Installing zsh-autosuggestions...${NC}\n"
+                git clone https://github.com/zsh-users/zsh-autosuggestions "$HOME/.oh-my-zsh/custom/plugins/zsh-autosuggestions" 2>/dev/null || true
+            else
+                printf "${GREEN}✅ zsh-autosuggestions already installed${NC}\n"
+            fi
+            
+            # zsh-syntax-highlighting
+            if [ ! -d "$HOME/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting" ]; then
+                printf "${YELLOW}Installing zsh-syntax-highlighting...${NC}\n"
+                git clone https://github.com/zsh-users/zsh-syntax-highlighting "$HOME/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting" 2>/dev/null || true
+            else
+                printf "${GREEN}✅ zsh-syntax-highlighting already installed${NC}\n"
+            fi
         fi
+    else
+        printf "${BLUE}zsh not available, skipping oh-my-zsh installation${NC}\n"
     fi
 }
 
@@ -150,23 +210,30 @@ install_oh_my_zsh() {
 install_git_prompt() {
     if [ "$OS" = "macos" ]; then
         if command -v brew >/dev/null 2>&1; then
-            printf "${YELLOW}Git completion should be available via Homebrew${NC}\n"
+            printf "${GREEN}Git completion should be available via Homebrew${NC}\n"
         else
             printf "${YELLOW}Downloading git-prompt.sh...${NC}\n"
             curl -o "$HOME/.git-prompt.sh" https://raw.githubusercontent.com/git/git/master/contrib/completion/git-prompt.sh 2>/dev/null || true
         fi
     elif [ "$OS" = "linux" ]; then
-        if ! find /usr -name "*git-prompt*" 2>/dev/null | grep -q git-prompt; then
-            printf "${YELLOW}Downloading git-prompt.sh...${NC}\n"
-            curl -o "$HOME/.git-prompt.sh" https://raw.githubusercontent.com/git/git/master/contrib/completion/git-prompt.sh 2>/dev/null || true
-        fi
+        # Already handled in install_dependencies for Linux
+        printf "${GREEN}Git prompt setup completed${NC}\n"
     fi
 }
 
 # Run installations
+printf "${BLUE}Installing dependencies and tools...${NC}\n"
 install_dependencies
-install_oh_my_zsh
 install_git_prompt
+install_oh_my_zsh
+
+# Verify installation
+printf "${BLUE}Verifying installation...${NC}\n"
+printf "Dotfiles directory contents:\n"
+ls -la "$DOTFILES_DIR" 2>/dev/null || printf "Could not list dotfiles directory\n"
+
+printf "\nHome directory symlinks:\n"
+ls -la "$HOME" | grep '\->' | grep -E '\.(bashrc|zshrc|vimrc|gitconfig|gitignore_global)' || printf "No dotfiles symlinks found\n"
 
 printf "${GREEN}✅ Dotfiles setup complete!${NC}\n"
 printf "\n"
@@ -195,13 +262,5 @@ printf "\n"
 printf "${YELLOW}Optional: Switch to zsh (if not already using it):${NC}\n"
 printf "${GREEN}  chsh -s \$(which zsh)${NC}\n"
 printf "\n"
-
-# Show what might need manual installation
-if [ "$OS" = "linux" ]; then
-    printf "${BLUE}If some features don't work, you might need to install:${NC}\n"
-    printf "${BLUE}  sudo apt-get install git vim curl bash-completion zsh${NC}\n"
-    printf "${BLUE}  (or equivalent for your package manager)${NC}\n"
-    printf "\n"
-fi
 
 printf "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
