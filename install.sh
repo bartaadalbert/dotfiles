@@ -1,38 +1,51 @@
-#!/bin/bash
+#!/bin/sh
 # ~/.dotfiles/install.sh
+# Compatible with both bash and sh, no sudo required
 
 set -e
 
-# Colors for output
+# Colors for output (compatible with sh)
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}🚀 Setting up dotfiles...${NC}"
+printf "${GREEN}🚀 Setting up dotfiles...${NC}\n"
 
 # Get the dotfiles directory
-DOTFILES_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+DOTFILES_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# If running via curl, clone the repo first
+if [ ! -d "$HOME/.dotfiles" ]; then
+    printf "${YELLOW}Cloning dotfiles repository...${NC}\n"
+    if command -v git >/dev/null 2>&1; then
+        git clone https://github.com/bartaadalbert/dotfiles.git "$HOME/.dotfiles"
+        DOTFILES_DIR="$HOME/.dotfiles"
+    else
+        printf "${RED}Error: git is not installed. Please install git first.${NC}\n"
+        exit 1
+    fi
+fi
 
 # Detect current shell
 CURRENT_SHELL=$(basename "$SHELL")
-echo -e "${BLUE}Current shell: $CURRENT_SHELL${NC}"
+printf "${BLUE}Current shell: $CURRENT_SHELL${NC}\n"
 
 # Function to create symlinks
 create_symlink() {
-    local src="$1"
-    local dest="$2"
+    src="$1"
+    dest="$2"
     
     if [ -L "$dest" ]; then
-        echo -e "${YELLOW}Removing existing symlink: $dest${NC}"
+        printf "${YELLOW}Removing existing symlink: $dest${NC}\n"
         rm "$dest"
     elif [ -f "$dest" ]; then
-        echo -e "${YELLOW}Backing up existing file: $dest -> $dest.backup${NC}"
+        printf "${YELLOW}Backing up existing file: $dest -> $dest.backup${NC}\n"
         mv "$dest" "$dest.backup"
     fi
     
-    echo -e "${GREEN}Creating symlink: $dest -> $src${NC}"
+    printf "${GREEN}Creating symlink: $dest -> $src${NC}\n"
     ln -sf "$src" "$dest"
 }
 
@@ -44,107 +57,136 @@ create_symlink "$DOTFILES_DIR/.gitconfig" "$HOME/.gitconfig"
 create_symlink "$DOTFILES_DIR/.gitignore_global" "$HOME/.gitignore_global"
 
 # Set up git to use global gitignore
-git config --global core.excludesfile ~/.gitignore_global
+if command -v git >/dev/null 2>&1; then
+    git config --global core.excludesfile ~/.gitignore_global
+fi
 
-# Detect OS and install dependencies
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    echo -e "${GREEN}🍎 Detected macOS${NC}"
-    # Install Homebrew if not present
-    if ! command -v brew &> /dev/null; then
-        echo -e "${YELLOW}Installing Homebrew...${NC}"
-        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-        
-        # Add Homebrew to PATH for this session
-        if [[ -f "/opt/homebrew/bin/brew" ]]; then
-            eval "$(/opt/homebrew/bin/brew shellenv)"
-        elif [[ -f "/usr/local/bin/brew" ]]; then
-            eval "$(/usr/local/bin/brew shellenv)"
+# Detect OS
+if [ "$(uname)" = "Darwin" ]; then
+    printf "${GREEN}🍎 Detected macOS${NC}\n"
+    OS="macos"
+elif [ "$(uname)" = "Linux" ]; then
+    printf "${GREEN}🐧 Detected Linux${NC}\n"
+    OS="linux"
+else
+    printf "${YELLOW}Unknown OS, skipping package installation${NC}\n"
+    OS="unknown"
+fi
+
+# Install dependencies without sudo
+install_dependencies() {
+    if [ "$OS" = "macos" ]; then
+        # Check for Homebrew
+        if ! command -v brew >/dev/null 2>&1; then
+            printf "${YELLOW}Homebrew not found. Installing Homebrew (this may take a while)...${NC}\n"
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            
+            # Add Homebrew to PATH for this session
+            if [ -f "/opt/homebrew/bin/brew" ]; then
+                eval "$(/opt/homebrew/bin/brew shellenv)"
+            elif [ -f "/usr/local/bin/brew" ]; then
+                eval "$(/usr/local/bin/brew shellenv)"
+            fi
         fi
-    fi
-    
-    # Install git completion
-    if ! brew list bash-completion &> /dev/null; then
-        echo -e "${YELLOW}Installing bash completion...${NC}"
-        brew install bash-completion
-    fi
-    
-    # Install zsh if not available
-    if ! command -v zsh &> /dev/null; then
-        echo -e "${YELLOW}Installing zsh...${NC}"
-        brew install zsh
-    fi
-    
-elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    echo -e "${GREEN}🐧 Detected Linux${NC}"
-    
-    # Update package list
-    if command -v apt-get &> /dev/null; then
-        echo -e "${YELLOW}Updating package list...${NC}"
-        sudo apt-get update
         
-        # Install essentials
-        sudo apt-get install -y git vim curl bash-completion zsh
-    elif command -v yum &> /dev/null; then
-        echo -e "${YELLOW}Installing packages via yum...${NC}"
-        sudo yum install -y git vim curl bash-completion zsh
-    fi
-fi
-
-# Install oh-my-zsh if zsh is available and oh-my-zsh isn't installed
-if command -v zsh &> /dev/null && [ ! -d "$HOME/.oh-my-zsh" ]; then
-    echo -e "${YELLOW}Installing oh-my-zsh...${NC}"
-    sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
-    
-    # Install useful plugins
-    echo -e "${YELLOW}Installing zsh plugins...${NC}"
-    git clone https://github.com/zsh-users/zsh-autosuggestions ~/.oh-my-zsh/custom/plugins/zsh-autosuggestions 2>/dev/null || true
-    git clone https://github.com/zsh-users/zsh-syntax-highlighting ~/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting 2>/dev/null || true
-fi
-
-# Install git-prompt if not available
-install_git_prompt() {
-    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # Install packages via Homebrew (no sudo needed)
         if command -v brew >/dev/null 2>&1; then
-            echo -e "${YELLOW}Git completion should be available via Homebrew${NC}"
-        else
-            echo -e "${YELLOW}Downloading git-prompt.sh...${NC}"
-            curl -o ~/.git-prompt.sh https://raw.githubusercontent.com/git/git/master/contrib/completion/git-prompt.sh
+            printf "${YELLOW}Installing packages via Homebrew...${NC}\n"
+            brew install git bash-completion zsh 2>/dev/null || true
         fi
-    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        
+    elif [ "$OS" = "linux" ]; then
+        printf "${YELLOW}Linux detected. Checking for user-level package managers...${NC}\n"
+        
+        # Check if we can install without sudo using existing tools
+        if command -v apt-get >/dev/null 2>&1; then
+            printf "${BLUE}Note: Some packages might need manual installation.${NC}\n"
+            printf "${BLUE}Consider running: sudo apt-get install git vim curl bash-completion zsh${NC}\n"
+        elif command -v yum >/dev/null 2>&1; then
+            printf "${BLUE}Note: Some packages might need manual installation.${NC}\n"
+            printf "${BLUE}Consider running: sudo yum install git vim curl bash-completion zsh${NC}\n"
+        fi
+        
+        # Try to install user-level tools
+        # Install git-prompt manually if not available
         if ! find /usr -name "*git-prompt*" 2>/dev/null | grep -q git-prompt; then
-            echo -e "${YELLOW}Downloading git-prompt.sh...${NC}"
-            curl -o ~/.git-prompt.sh https://raw.githubusercontent.com/git/git/master/contrib/completion/git-prompt.sh
+            printf "${YELLOW}Downloading git-prompt.sh...${NC}\n"
+            curl -o "$HOME/.git-prompt.sh" https://raw.githubusercontent.com/git/git/master/contrib/completion/git-prompt.sh 2>/dev/null || true
         fi
     fi
 }
 
+# Install oh-my-zsh if zsh is available and oh-my-zsh isn't installed
+install_oh_my_zsh() {
+    if command -v zsh >/dev/null 2>&1 && [ ! -d "$HOME/.oh-my-zsh" ]; then
+        printf "${YELLOW}Installing oh-my-zsh...${NC}\n"
+        sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended 2>/dev/null || true
+        
+        # Install useful plugins
+        if [ -d "$HOME/.oh-my-zsh" ]; then
+            printf "${YELLOW}Installing zsh plugins...${NC}\n"
+            git clone https://github.com/zsh-users/zsh-autosuggestions "$HOME/.oh-my-zsh/custom/plugins/zsh-autosuggestions" 2>/dev/null || true
+            git clone https://github.com/zsh-users/zsh-syntax-highlighting "$HOME/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting" 2>/dev/null || true
+        fi
+    fi
+}
+
+# Install git-prompt for better git integration
+install_git_prompt() {
+    if [ "$OS" = "macos" ]; then
+        if command -v brew >/dev/null 2>&1; then
+            printf "${YELLOW}Git completion should be available via Homebrew${NC}\n"
+        else
+            printf "${YELLOW}Downloading git-prompt.sh...${NC}\n"
+            curl -o "$HOME/.git-prompt.sh" https://raw.githubusercontent.com/git/git/master/contrib/completion/git-prompt.sh 2>/dev/null || true
+        fi
+    elif [ "$OS" = "linux" ]; then
+        if ! find /usr -name "*git-prompt*" 2>/dev/null | grep -q git-prompt; then
+            printf "${YELLOW}Downloading git-prompt.sh...${NC}\n"
+            curl -o "$HOME/.git-prompt.sh" https://raw.githubusercontent.com/git/git/master/contrib/completion/git-prompt.sh 2>/dev/null || true
+        fi
+    fi
+}
+
+# Run installations
+install_dependencies
+install_oh_my_zsh
 install_git_prompt
 
-echo -e "${GREEN}✅ Dotfiles setup complete!${NC}"
-echo ""
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}Next steps:${NC}"
-echo "1. Update your name and email in ~/.gitconfig"
-echo ""
+printf "${GREEN}✅ Dotfiles setup complete!${NC}\n"
+printf "\n"
+printf "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+printf "${GREEN}Next steps:${NC}\n"
+printf "1. Update your name and email in ~/.gitconfig\n"
+printf "\n"
 
 # Provide shell-specific sourcing instructions
-echo -e "${YELLOW}To activate your new configuration:${NC}"
+printf "${YELLOW}To activate your new configuration:${NC}\n"
 
-if [[ "$CURRENT_SHELL" == "zsh" ]]; then
-    echo -e "${GREEN}  source ~/.zshrc${NC}   (for zsh)"
-    echo -e "  ${BLUE}or${NC}"
-    echo -e "${GREEN}  exec zsh${NC}         (restart zsh)"
-elif [[ "$CURRENT_SHELL" == "bash" ]]; then
-    echo -e "${GREEN}  source ~/.bashrc${NC}  (for bash)"
-    echo -e "  ${BLUE}or${NC}"
-    echo -e "${GREEN}  exec bash${NC}        (restart bash)"
+if [ "$CURRENT_SHELL" = "zsh" ]; then
+    printf "${GREEN}  source ~/.zshrc${NC}   (for zsh)\n"
+    printf "  ${BLUE}or${NC}\n"
+    printf "${GREEN}  exec zsh${NC}         (restart zsh)\n"
+elif [ "$CURRENT_SHELL" = "bash" ]; then
+    printf "${GREEN}  source ~/.bashrc${NC}  (for bash)\n"
+    printf "  ${BLUE}or${NC}\n"
+    printf "${GREEN}  exec bash${NC}        (restart bash)\n"
 else
-    echo -e "${GREEN}  source ~/.bashrc${NC}  (for bash)"
-    echo -e "${GREEN}  source ~/.zshrc${NC}   (for zsh)"
+    printf "${GREEN}  source ~/.bashrc${NC}  (for bash)\n"
+    printf "${GREEN}  source ~/.zshrc${NC}   (for zsh)\n"
 fi
 
-echo ""
-echo -e "${YELLOW}Optional: Switch to zsh (if not already using it):${NC}"
-echo -e "${GREEN}  chsh -s \$(which zsh)${NC}"
-echo ""
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+printf "\n"
+printf "${YELLOW}Optional: Switch to zsh (if not already using it):${NC}\n"
+printf "${GREEN}  chsh -s \$(which zsh)${NC}\n"
+printf "\n"
+
+# Show what might need manual installation
+if [ "$OS" = "linux" ]; then
+    printf "${BLUE}If some features don't work, you might need to install:${NC}\n"
+    printf "${BLUE}  sudo apt-get install git vim curl bash-completion zsh${NC}\n"
+    printf "${BLUE}  (or equivalent for your package manager)${NC}\n"
+    printf "\n"
+fi
+
+printf "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
