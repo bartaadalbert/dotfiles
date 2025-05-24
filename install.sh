@@ -19,6 +19,13 @@ DOTFILES_DIR="$(cd "$(dirname "$0")" && pwd)"
 # If running via curl, clone the repo first
 if [ ! -d "$HOME/.dotfiles" ]; then
     printf "${YELLOW}Cloning dotfiles repository...${NC}\n"
+    
+    # Fix any broken git config before cloning
+    if [ -L "$HOME/.gitconfig" ] && [ ! -f "$HOME/.gitconfig" ]; then
+        printf "${YELLOW}Removing broken git config symlink...${NC}\n"
+        rm -f "$HOME/.gitconfig"
+    fi
+    
     if command -v git >/dev/null 2>&1; then
         git clone https://github.com/bartaadalbert/dotfiles.git "$HOME/.dotfiles"
         DOTFILES_DIR="$HOME/.dotfiles"
@@ -26,27 +33,35 @@ if [ ! -d "$HOME/.dotfiles" ]; then
         printf "${RED}Error: git is not installed. Please install git first.${NC}\n"
         exit 1
     fi
+else
+    DOTFILES_DIR="$HOME/.dotfiles"
 fi
 
 # Detect current shell
 CURRENT_SHELL=$(basename "$SHELL")
 printf "${BLUE}Current shell: $CURRENT_SHELL${NC}\n"
 
-# Function to create symlinks
+# Function to create symlinks safely
 create_symlink() {
     src="$1"
     dest="$2"
     
+    # Remove any existing symlink (even if broken)
     if [ -L "$dest" ]; then
         printf "${YELLOW}Removing existing symlink: $dest${NC}\n"
-        rm "$dest"
+        rm -f "$dest"
     elif [ -f "$dest" ]; then
         printf "${YELLOW}Backing up existing file: $dest -> $dest.backup${NC}\n"
         mv "$dest" "$dest.backup"
     fi
     
-    printf "${GREEN}Creating symlink: $dest -> $src${NC}\n"
-    ln -sf "$src" "$dest"
+    # Ensure source file exists before creating symlink
+    if [ -f "$src" ]; then
+        printf "${GREEN}Creating symlink: $dest -> $src${NC}\n"
+        ln -sf "$src" "$dest"
+    else
+        printf "${RED}Warning: Source file $src not found, skipping symlink${NC}\n"
+    fi
 }
 
 # Create symlinks for dotfiles
